@@ -1,6 +1,6 @@
 # Local Music Bot (LMB) for Discord
 
-**[English](#-english)** . **[Русский](#-русский)** 
+**[English](#-english)** · **[Русский](#-русский)** · **[Development](#dev-build)** 
 
 ## 🇬🇧 English
 
@@ -61,6 +61,21 @@ Then enter your **bot token** and **music folder** and start the bot from the ap
 ### Безопасность
 
 Файл **`bot_settings.json`** хранит токен в открытом виде. Не отправляйте его и не выкладывайте папку с программой, если в ней ваши настройки. Чтобы поделиться ботом с друзьями, отправьте ссылку на эту страницу или на релиз.
+
+---
+
+<a id="dev-build"></a>
+
+## Development
+
+**Stack:** Windows, CPython 3.8+, `requirements.txt`. Main script: `Local_Music_Bot.pyw`. PyInstaller uses `LocalMusicBot.spec` and `hook-discord.py`; the spec expects Opus DLLs under `discord/bin` (install voice deps via `requirements.txt`).
+
+```bash
+pip install -r requirements.txt
+pythonw Local_Music_Bot.pyw    # use python … for console output
+```
+
+**Build:** `pip install -r requirements-build.txt`, then `pyinstaller --noconfirm --clean LocalMusicBot.spec` → `dist/LMB.exe`. For the release ZIP (`Local_Music_Bot_<version>/LMB.exe`, version from `APP_VERSION` in the `.pyw`), run `python build_release.py`.
 
 ---
 Repository: [github.com/LouisFahrenheit/LMB](https://github.com/LouisFahrenheit/LMB) 
