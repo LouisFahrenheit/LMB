@@ -1,7 +1,7 @@
 import sys
 import os
 import shutil
-import _cffi_backend  # PyInstaller: иначе PyNaCl не грузится → голос Discord недоступен
+import _cffi_backend
 import discord
 from discord import app_commands
 from discord.ext import commands
