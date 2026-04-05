@@ -2,7 +2,7 @@
 
 **[English](#-english)** · **[Русский](#-русский)** · **[Development](#dev-build)** 
 
-## 🇬🇧 English
+## 🇺🇸 English
 
 **Local Music Bot** is a **Windows** app with a settings window. It plays **music from your computer** in a Discord voice channel.
 <img src="Screenshots/Demo-1.png" width="900">
