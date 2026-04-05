@@ -63,4 +63,4 @@ Then enter your **bot token** and **music folder** and start the bot from the ap
 Файл **`bot_settings.json`** хранит токен в открытом виде. Не отправляйте его и не выкладывайте папку с программой, если в ней ваши настройки. Чтобы поделиться ботом с друзьями, отправьте ссылку на эту страницу или на релиз.
 
 ---
-Repository: [github.com/LouisFahrenheit/LMB](https://github.com/LouisFahrenheit/LMB) — **PRs welcome.**
+Repository: [github.com/LouisFahrenheit/LMB](https://github.com/LouisFahrenheit/LMB) 
