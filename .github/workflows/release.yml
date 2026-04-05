@@ -17,7 +17,6 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
-      # После перехода официальных actions на Node 24 предупреждение о Node 20 пропадает
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v5
@@ -27,8 +26,6 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      # PyInstaller не берём из requirements-build.txt — на CI файл часто отсутствует в коммите;
-      # локально можно по-прежнему использовать requirements-build.txt вручную.
       - name: Install dependencies
         shell: pwsh
         run: |
