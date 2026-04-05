@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Сборка и архив (версия из APP_VERSION)
+        id: pack
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'icon.ico')) {
+            Write-Error 'В корне репозитория должен быть icon.ico.'
+            exit 1
+          }
+          if (-not (Test-Path 'LocalMusicBot.spec')) {
+            Write-Error 'Ожидается LocalMusicBot.spec.'
+            exit 1
+          }
+          python build_release.py
+          $zip = Get-ChildItem -Path 'dist' -Filter 'Local_Music_Bot_*.zip' | Select-Object -First 1
+          if (-not $zip) {
+            Write-Error 'Не создан dist/Local_Music_Bot_*.zip'
+            exit 1
+          }
+          "ZIP_NAME=$($zip.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Загрузить артефакт (без тега)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.ZIP_NAME }}
+          path: dist/${{ steps.pack.outputs.ZIP_NAME }}
+
+      - name: GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ steps.pack.outputs.ZIP_NAME }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
