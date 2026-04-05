@@ -23,10 +23,17 @@ jobs:
           cache: pip
 
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-build.txt
+          pip install -r requirements.txt
+          if (Test-Path 'requirements-build.txt') {
+            pip install -r requirements-build.txt
+          } else {
+            pip install "pyinstaller>=6.0" "pyinstaller-hooks-contrib>=2024.0"
+          }
 
+      # LocalMusicBot.spec → dist/LMB.exe; build_release.py → dist/Local_Music_Bot_<версия>.zip
       - name: Сборка и архив (версия из APP_VERSION)
         id: pack
         shell: pwsh
