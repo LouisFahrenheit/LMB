@@ -1,7 +1,7 @@
 # Local Music Bot — Python dependencies
 # Установка: pip install -r requirements.txt
 
-discord.py>=2.3.0,<3
+discord.py[voice]>=2.3.0,<3
 PyQt6>=6.5.0
 pytaglib>=2.0.0
 mutagen>=1.47.0

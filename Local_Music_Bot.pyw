@@ -1,6 +1,7 @@
 import sys
 import os
 import shutil
+import _cffi_backend  # PyInstaller: иначе PyNaCl не грузится → голос Discord недоступен
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -30,7 +31,7 @@ from io import BytesIO
 from typing import Optional
 
 CONFIG_FILE = "bot_settings.json"
-APP_VERSION = "1.0"
+APP_VERSION = "1.0.0"
 
 LOG_FILE_NAME = "local_music_bot.log"
 LOG_MAX_BYTES = 2 * 1024 * 1024
@@ -38,13 +39,131 @@ LOG_BACKUP_COUNT = 5
 _file_logging_initialized = False
 
 
-def resource_path(relative_name):
-    """Возвращает путь к файлу рядом с .exe (после сборки) или рядом со скриптом (при запуске из исходников)."""
+def app_executable_dir():
+    """Папка с .exe (frozen) или со скриптом — логи, bot_settings.json, ffmpeg рядом с программой."""
     if getattr(sys, 'frozen', False):
-        base = os.path.dirname(sys.executable)
-    else:
-        base = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, relative_name)
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def resource_path(relative_name):
+    """Путь к файлу рядом с .exe/скриптом (логи, настройки — не во временной папке PyInstaller)."""
+    return os.path.join(app_executable_dir(), relative_name)
+
+
+def bundled_asset_path(relative_name):
+    """Файлы из --add-data: в onefile/onedir лежат в sys._MEIPASS; иначе путь как у resource_path."""
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            internal = os.path.join(meipass, relative_name)
+            if os.path.isfile(internal):
+                return internal
+    return resource_path(relative_name)
+
+
+def _format_voice_error(exc, limit=900):
+    """Текст для логов/Discord; у discord.opus.OpusNotLoaded и др. str() часто пустой."""
+    if exc is None:
+        return ""
+    msg = str(exc).strip()
+    if not msg:
+        msg = type(exc).__name__
+    if len(msg) > limit:
+        return msg[: limit - 1] + "…"
+    return msg
+
+
+def ensure_discord_opus_loaded(report=None):
+    """Загружает libopus для голоса. report(msg) — опционально диагностика в лог.
+
+    В EXE нужны DLL из discord/bin (PyInstaller: hook-discord.py + --additional-hooks-dir
+    или флаг --collect-data discord).
+    """
+    import struct
+    from discord import opus as dopus
+
+    def r(msg):
+        if report:
+            try:
+                report(msg)
+            except Exception:
+                pass
+
+    if dopus.is_loaded():
+        return True
+
+    bitness = "x64" if struct.calcsize("P") * 8 > 32 else "x86"
+    name = f"libopus-0.{bitness}.dll"
+    candidates = []
+
+    try:
+        from importlib.resources import files as ir_files
+
+        try:
+            ref = ir_files("discord") / "bin" / name
+            if ref.is_file():
+                candidates.append(str(ref))
+        except Exception:
+            pass
+    except ImportError:
+        pass
+
+    discord_dir = os.path.dirname(os.path.abspath(discord.__file__))
+    candidates.append(os.path.join(discord_dir, "bin", name))
+    try:
+        import discord.opus as _dopus_mod
+
+        od = os.path.dirname(os.path.abspath(_dopus_mod.__file__))
+        candidates.append(os.path.join(od, "bin", name))
+    except Exception:
+        pass
+
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(os.path.join(meipass, "discord", "bin", name))
+            candidates.append(os.path.join(meipass, "_internal", "discord", "bin", name))
+        exe_dir = app_executable_dir()
+        candidates.append(os.path.join(exe_dir, "discord", "bin", name))
+        candidates.append(os.path.join(exe_dir, "_internal", "discord", "bin", name))
+
+    seen = set()
+    ordered = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            ordered.append(c)
+
+    missing_paths = []
+    load_errors = []
+    for path in ordered:
+        if not os.path.isfile(path):
+            missing_paths.append(path)
+            continue
+        try:
+            dopus.load_opus(path)
+            if dopus.is_loaded():
+                return True
+        except Exception as ex:
+            load_errors.append(f"{path}: {type(ex).__name__}: {ex}")
+
+    if load_errors:
+        for line in load_errors[:4]:
+            r(f"opus: {line}")
+    if missing_paths:
+        r(
+            "opus: не найден libopus-0.*.dll (проверено путей: {}). Пример: {}"
+            .format(len(missing_paths), missing_paths[0])
+        )
+    r(
+        "opus: соберите exe: pyinstaller --noconfirm --clean LocalMusicBot.spec "
+        "(в spec явно добавляются discord/bin/*.dll)."
+    )
+    return False
+
+
+ensure_discord_opus_loaded()
 
 
 def ensure_app_file_logging():
@@ -72,6 +191,12 @@ def ensure_app_file_logging():
 
 def find_ffmpeg() -> str:
     import shutil
+
+    if getattr(sys, "frozen", False):
+        for name in ("ffmpeg.exe", "ffmpeg"):
+            p = os.path.join(app_executable_dir(), name)
+            if os.path.isfile(p):
+                return p
 
     candidates = []
 
@@ -290,6 +415,8 @@ class Translator:
                 'not_in_voice': "❌ Вы не в голосовом канале!",
                 'file_not_found': "❌ Файл не найден: {}",
                 'playback_error': "❌ Ошибка воспроизведения",
+                'opus_missing_discord': "❌ Нет libopus для голоса. Соберите из проекта: `pyinstaller --noconfirm --clean LocalMusicBot.spec` (рядом с .pyw лежит этот файл).",
+                'opus_missing_log': "❌ libopus (discord/bin) не попал в exe. Используйте сборку: pyinstaller --noconfirm --clean LocalMusicBot.spec",
                 'now_playing_discord': "▶️ {}",
                 'paused_discord': "⏸️ Пауза",
                 'resumed_discord': "▶️ Продолжить",
@@ -705,6 +832,8 @@ class Translator:
                 'not_in_voice': "❌ You are not in a voice channel!",
                 'file_not_found': "❌ File not found: {}",
                 'playback_error': "❌ Playback error",
+                'opus_missing_discord': "❌ libopus for voice missing. Build from the project folder: `pyinstaller --noconfirm --clean LocalMusicBot.spec`",
+                'opus_missing_log': "❌ libopus (discord/bin) not in the exe. Run: pyinstaller --noconfirm --clean LocalMusicBot.spec",
                 'now_playing_discord': "▶️ {}",
                 'paused_discord': "⏸️ Pause",
                 'resumed_discord': "▶️ Resume",
@@ -2274,7 +2403,23 @@ class DiscordBotThread(QThread):
         voice_client = await self.ensure_voice_connection(ctx)
         if not voice_client:
             return
-            
+
+        from discord import opus as _opus_check
+
+        if not _opus_check.is_loaded():
+            ensure_discord_opus_loaded(lambda m: self.log(m, is_error=True))
+        if not _opus_check.is_loaded():
+            self.log(self.tr.t("opus_missing_log"), is_error=True)
+            await ctx.send(self.tr.t("opus_missing_discord"))
+            next_track_info = self.queues[guild_id].get_next_track()
+            if next_track_info[0]:
+                await self.play_audio(ctx, next_track_info[0], next_track_info[1])
+            elif self.config.autoplay_enabled and self.is_running:
+                next_song = self.get_next_auto_song(guild_id)
+                if next_song:
+                    await self.play_audio(ctx, next_song, is_user=False)
+            return
+
         if guild_id not in self.played_history:
             self.played_history[guild_id] = []
         self.played_history[guild_id].append(file_path)
@@ -2297,7 +2442,7 @@ class DiscordBotThread(QThread):
         
         def play_next(error=None):
             if error:
-                self.log(self.tr.t('playback_error_log').format(str(error)), is_error=True)
+                self.log(self.tr.t('playback_error_log').format(_format_voice_error(error)), is_error=True)
             saved_ctx = self.contexts.get(guild_id)
             if not saved_ctx:
                 self.log(self.tr.t('context_not_found').format(guild_id))
@@ -2380,8 +2525,10 @@ class DiscordBotThread(QThread):
             self.log(self.tr.t('playing').format(display_name, queue_status))
             await ctx.send(self.tr.t('now_playing_discord').format(display_name))
         except Exception as e:
-            self.log(self.tr.t('playback_error_log').format(str(e)), is_error=True)
-            await ctx.send(self.tr.t('playback_error'))
+            err_log = _format_voice_error(e, 900)
+            err_discord = _format_voice_error(e, 450)
+            self.log(self.tr.t('playback_error_log').format(err_log), is_error=True)
+            await ctx.send(self.tr.t('playback_error_log').format(err_discord))
             next_track_info = self.queues[guild_id].get_next_track()
             if next_track_info[0]:
                 await self.play_audio(ctx, next_track_info[0], next_track_info[1])
@@ -3850,8 +3997,8 @@ class DiscordBotThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        # Иконка окна — icon.ico рядом с приложением (работает и в .exe)
-        _icon_path = resource_path("icon.ico")
+        # Иконка окна — из сборки (MEIPASS) или icon.ico рядом с .exe
+        _icon_path = bundled_asset_path("icon.ico")
         _app_icon = QIcon(_icon_path) if os.path.isfile(_icon_path) else QIcon()
         self.setWindowIcon(_app_icon)
 
@@ -6347,7 +6494,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     # Иконка в панели задач / трее
-    _icon_path = resource_path("icon.ico")
+    _icon_path = bundled_asset_path("icon.ico")
     if os.path.isfile(_icon_path):
         app.setWindowIcon(QIcon(_icon_path))
     app.setStyleSheet("""
