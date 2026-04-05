@@ -17,6 +17,7 @@ jobs:
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
+      # После перехода официальных actions на Node 24 предупреждение о Node 20 пропадает
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v5
@@ -26,6 +27,8 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # PyInstaller не берём из requirements-build.txt — на CI файл часто отсутствует в коммите;
+      # локально можно по-прежнему использовать requirements-build.txt вручную.
       - name: Install dependencies
         shell: pwsh
         run: |
@@ -33,7 +36,7 @@ jobs:
           pip install -r requirements.txt
           pip install "pyinstaller>=6.0" "pyinstaller-hooks-contrib>=2024.0"
 
-      # LocalMusicBot.spec → dist/LMB.exe; build_release.py → dist/Local_Music_Bot_<версия>.zip
+      # LocalMusicBot.spec → dist/LMB.exe → dist/Local_Music_Bot_<APP_VERSION>.zip (логика как в build_release.py, без отдельного скрипта на CI)
       - name: Сборка и архив (версия из APP_VERSION)
         id: pack
         shell: pwsh
@@ -43,16 +46,42 @@ jobs:
             exit 1
           }
           if (-not (Test-Path 'LocalMusicBot.spec')) {
-            Write-Error 'Ожидается LocalMusicBot.spec.'
+            Write-Host '::error::Нет LocalMusicBot.spec в корне репозитория.'
+            Get-ChildItem -Name
             exit 1
           }
-          python build_release.py
-          $zip = Get-ChildItem -Path 'dist' -Filter 'Local_Music_Bot_*.zip' | Select-Object -First 1
-          if (-not $zip) {
-            Write-Error 'Не создан dist/Local_Music_Bot_*.zip'
+          if (-not (Test-Path 'Local_Music_Bot.pyw')) {
+            Write-Error 'Нет Local_Music_Bot.pyw в корне репозитория.'
             exit 1
           }
-          "ZIP_NAME=$($zip.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          $raw = Get-Content -Raw -Path 'Local_Music_Bot.pyw' -Encoding UTF8
+          if ($raw -notmatch '(?m)^APP_VERSION\s*=\s*[''"]([^''"]+)[''"]') {
+            Write-Error 'В Local_Music_Bot.pyw не найдена строка APP_VERSION = "..."'
+            exit 1
+          }
+          $version = $Matches[1].Trim()
+          $safe = $version -replace '[<>:"/\\|?*]', '_'
+          $folder = "Local_Music_Bot_$safe"
+          $zipName = "$folder.zip"
+
+          python -m PyInstaller --noconfirm --clean LocalMusicBot.spec
+          if (-not (Test-Path 'dist\LMB.exe')) {
+            Write-Error 'PyInstaller не создал dist\LMB.exe'
+            exit 1
+          }
+
+          $stageRoot = 'dist\_ci_zip_stage'
+          if (Test-Path $stageRoot) { Remove-Item -Recurse -Force $stageRoot }
+          $inner = Join-Path $stageRoot $folder
+          New-Item -ItemType Directory -Force -Path $inner | Out-Null
+          Copy-Item 'dist\LMB.exe' (Join-Path $inner 'LMB.exe')
+          $zipPath = Join-Path 'dist' $zipName
+          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+          Compress-Archive -Path $inner -DestinationPath $zipPath -CompressionLevel Optimal
+          Remove-Item -Recurse -Force $stageRoot
+
+          "ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Загрузить артефакт (без тега)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
