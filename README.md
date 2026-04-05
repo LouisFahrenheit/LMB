@@ -23,7 +23,10 @@
 1. Open **[Releases](https://github.com/LouisFahrenheit/LMB/releases)** and download the latest build.  
 2. Unzip anywhere and run the **EXE**.  
 3. You need **your own** Discord bot (free). The **“Info”** tab in the app walks you through creating the app, enabling permissions, and inviting the bot.  
-4. **FFmpeg** is required for audio: install it system-wide, place `ffmpeg.exe` next to the EXE, or set the full path in settings.  
+4. **FFmpeg** is required for audio: install it system-wide, place `ffmpeg.exe` next to the EXE, or set the full path in settings.
+```bash
+winget install "FFmpeg (Essentials Build)"
+```
 
 Then enter your **bot token** and **music folder** and start the bot from the app—commands work on your server.
 <img src="Screenshots/Demo-2.png" width="900">
@@ -54,7 +57,11 @@ Then enter your **bot token** and **music folder** and start the bot from the ap
 1. Откройте **[Releases](https://github.com/LouisFahrenheit/LMB/releases)** и скачайте последнюю сборку.  
 2. Распакуйте в любую папку и запустите **EXE**.  
 3. В Discord нужен **свой бот** (бесплатно): как создать приложение, включить нужные права и пригласить бота — пошагово во вкладке **«Инфо»** в программе.  
-4. Для звука нужен **FFmpeg**: установите в систему, положите `ffmpeg.exe` рядом с EXE или укажите полный путь к нему в настройках.  
+4. Для звука нужен **FFmpeg**: - Выполните 
+```bash
+winget install "FFmpeg (Essentials Build)"
+```
+Альтернатива - Положите `ffmpeg.exe` рядом с ботом или укажите полный путь к нему в настройках.  
 
 Дальше в программе укажите **токен бота** и **папку с музыкой** — после запуска бота команды доступны на сервере.
 
