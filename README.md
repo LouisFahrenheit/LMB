@@ -5,7 +5,7 @@
 ## 🇬🇧 English
 
 **Local Music Bot** is a **Windows** app with a settings window. It plays **music from your computer** in a Discord voice channel.
-
+<img src="Screenshots/Demo-1.png" width="900">
 ### Features
 
 - Play tracks from a folder, search by filename, or pick a random track  
@@ -26,7 +26,7 @@
 4. **FFmpeg** is required for audio: install it system-wide, place `ffmpeg.exe` next to the EXE, or set the full path in settings.  
 
 Then enter your **bot token** and **music folder** and start the bot from the app—commands work on your server.
-
+<img src="Screenshots/Demo-2.png" width="900">
 ### Security
 
 **`bot_settings.json`** stores your token in plain text. Do not share that file or a zip of the app folder if it contains your settings. To share the bot with friends, send them this page or the release link
