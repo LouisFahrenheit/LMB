@@ -1,4 +1,4 @@
-# Local Music Bot (LMB)
+# Local Music Bot (LMB) for Discord
 
 **[English](#-english)** . **[Русский](#-русский)** 
 
