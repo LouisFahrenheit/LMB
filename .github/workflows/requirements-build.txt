@@ -1,0 +1,3 @@
+# Только для сборки EXE (локально или в GitHub Actions)
+pyinstaller>=6.0
+pyinstaller-hooks-contrib>=2024.0
