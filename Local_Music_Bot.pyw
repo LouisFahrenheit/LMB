@@ -1,7 +1,6 @@
 import sys
 import os
 import shutil
-import _cffi_backend
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -39,131 +38,29 @@ LOG_BACKUP_COUNT = 5
 _file_logging_initialized = False
 
 
-def app_executable_dir():
-    """Папка с .exe (frozen) или со скриптом — логи, bot_settings.json, ffmpeg рядом с программой."""
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
-
-
 def resource_path(relative_name):
-    """Путь к файлу рядом с .exe/скриптом (логи, настройки — не во временной папке PyInstaller)."""
-    return os.path.join(app_executable_dir(), relative_name)
-
-
-def bundled_asset_path(relative_name):
-    """Файлы из --add-data: в onefile/onedir лежат в sys._MEIPASS; иначе путь как у resource_path."""
+    """Возвращает путь к файлу рядом с .exe (после сборки) или рядом со скриптом (при запуске из исходников)."""
     if getattr(sys, 'frozen', False):
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            internal = os.path.join(meipass, relative_name)
-            if os.path.isfile(internal):
-                return internal
-    return resource_path(relative_name)
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, relative_name)
 
 
-def _format_voice_error(exc, limit=900):
-    """Текст для логов/Discord; у discord.opus.OpusNotLoaded и др. str() часто пустой."""
-    if exc is None:
-        return ""
-    msg = str(exc).strip()
-    if not msg:
-        msg = type(exc).__name__
-    if len(msg) > limit:
-        return msg[: limit - 1] + "…"
-    return msg
-
-
-def ensure_discord_opus_loaded(report=None):
-    """Загружает libopus для голоса. report(msg) — опционально диагностика в лог.
-
-    В EXE нужны DLL из discord/bin (PyInstaller: hook-discord.py + --additional-hooks-dir
-    или флаг --collect-data discord).
-    """
-    import struct
-    from discord import opus as dopus
-
-    def r(msg):
-        if report:
-            try:
-                report(msg)
-            except Exception:
-                pass
-
-    if dopus.is_loaded():
-        return True
-
-    bitness = "x64" if struct.calcsize("P") * 8 > 32 else "x86"
-    name = f"libopus-0.{bitness}.dll"
-    candidates = []
-
-    try:
-        from importlib.resources import files as ir_files
-
-        try:
-            ref = ir_files("discord") / "bin" / name
-            if ref.is_file():
-                candidates.append(str(ref))
-        except Exception:
-            pass
-    except ImportError:
-        pass
-
-    discord_dir = os.path.dirname(os.path.abspath(discord.__file__))
-    candidates.append(os.path.join(discord_dir, "bin", name))
-    try:
-        import discord.opus as _dopus_mod
-
-        od = os.path.dirname(os.path.abspath(_dopus_mod.__file__))
-        candidates.append(os.path.join(od, "bin", name))
-    except Exception:
-        pass
-
+def resolve_icon_path():
+    """icon.ico: рядом с .exe (если положить вручную) или из распаковки PyInstaller onefile (sys._MEIPASS)."""
+    name = "icon.ico"
     if getattr(sys, "frozen", False):
+        exe_side = os.path.join(os.path.dirname(sys.executable), name)
+        if os.path.isfile(exe_side):
+            return exe_side
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
-            candidates.append(os.path.join(meipass, "discord", "bin", name))
-            candidates.append(os.path.join(meipass, "_internal", "discord", "bin", name))
-        exe_dir = app_executable_dir()
-        candidates.append(os.path.join(exe_dir, "discord", "bin", name))
-        candidates.append(os.path.join(exe_dir, "_internal", "discord", "bin", name))
-
-    seen = set()
-    ordered = []
-    for c in candidates:
-        if c and c not in seen:
-            seen.add(c)
-            ordered.append(c)
-
-    missing_paths = []
-    load_errors = []
-    for path in ordered:
-        if not os.path.isfile(path):
-            missing_paths.append(path)
-            continue
-        try:
-            dopus.load_opus(path)
-            if dopus.is_loaded():
-                return True
-        except Exception as ex:
-            load_errors.append(f"{path}: {type(ex).__name__}: {ex}")
-
-    if load_errors:
-        for line in load_errors[:4]:
-            r(f"opus: {line}")
-    if missing_paths:
-        r(
-            "opus: не найден libopus-0.*.dll (проверено путей: {}). Пример: {}"
-            .format(len(missing_paths), missing_paths[0])
-        )
-    r(
-        "opus: соберите exe: pyinstaller --noconfirm --clean LocalMusicBot.spec "
-        "(в spec явно добавляются discord/bin/*.dll)."
-    )
-    return False
-
-
-ensure_discord_opus_loaded()
+            bundled = os.path.join(meipass, name)
+            if os.path.isfile(bundled):
+                return bundled
+        return exe_side
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
 
 
 def ensure_app_file_logging():
@@ -191,12 +88,6 @@ def ensure_app_file_logging():
 
 def find_ffmpeg() -> str:
     import shutil
-
-    if getattr(sys, "frozen", False):
-        for name in ("ffmpeg.exe", "ffmpeg"):
-            p = os.path.join(app_executable_dir(), name)
-            if os.path.isfile(p):
-                return p
 
     candidates = []
 
@@ -415,8 +306,6 @@ class Translator:
                 'not_in_voice': "❌ Вы не в голосовом канале!",
                 'file_not_found': "❌ Файл не найден: {}",
                 'playback_error': "❌ Ошибка воспроизведения",
-                'opus_missing_discord': "❌ Нет libopus для голоса. Соберите из проекта: `pyinstaller --noconfirm --clean LocalMusicBot.spec` (рядом с .pyw лежит этот файл).",
-                'opus_missing_log': "❌ libopus (discord/bin) не попал в exe. Используйте сборку: pyinstaller --noconfirm --clean LocalMusicBot.spec",
                 'now_playing_discord': "▶️ {}",
                 'paused_discord': "⏸️ Пауза",
                 'resumed_discord': "▶️ Продолжить",
@@ -832,8 +721,6 @@ class Translator:
                 'not_in_voice': "❌ You are not in a voice channel!",
                 'file_not_found': "❌ File not found: {}",
                 'playback_error': "❌ Playback error",
-                'opus_missing_discord': "❌ libopus for voice missing. Build from the project folder: `pyinstaller --noconfirm --clean LocalMusicBot.spec`",
-                'opus_missing_log': "❌ libopus (discord/bin) not in the exe. Run: pyinstaller --noconfirm --clean LocalMusicBot.spec",
                 'now_playing_discord': "▶️ {}",
                 'paused_discord': "⏸️ Pause",
                 'resumed_discord': "▶️ Resume",
@@ -1210,6 +1097,29 @@ def get_track_name_from_file(file_path):
     except Exception:
         filename = os.path.basename(file_path)
         return re.sub(r'^\d+[\s\.\-_]*', '', os.path.splitext(filename)[0]).strip() or os.path.splitext(filename)[0]
+
+
+def scan_music_folder_files(config):
+    """Сканирует папку с музыкой. Не трогает состояние бота — безопасно вызывать из executor (to_thread)."""
+    if not config.music_folder or not os.path.exists(config.music_folder):
+        return []
+    files = []
+    for root, dirs, filenames in os.walk(config.music_folder):
+        dirs.sort(key=lambda x: x.lower())
+        filenames.sort(key=lambda x: x.lower())
+        for filename in filenames:
+            if any(filename.lower().endswith(fmt) for fmt in config.supported_formats):
+                full_path = os.path.join(root, filename)
+                display_name = get_track_name_from_file(full_path)
+                files.append({
+                    'path': full_path,
+                    'name': filename,
+                    'relative': os.path.relpath(full_path, config.music_folder),
+                    'display_name': display_name
+                })
+    files.sort(key=lambda x: x['display_name'].lower())
+    return files
+
 
 def get_track_info(file_path):
     info = {
@@ -2106,34 +2016,13 @@ class DiscordBotThread(QThread):
     
     def get_sorted_music_files(self):
         """Возвращает список файлов, отсортированный по display_name"""
-        if not self.config.music_folder or not os.path.exists(self.config.music_folder):
-            return []
-        
-        files = []
-        
         try:
-            for root, dirs, filenames in os.walk(self.config.music_folder):
-                dirs.sort(key=lambda x: x.lower())
-                filenames.sort(key=lambda x: x.lower())
-                
-                for filename in filenames:
-                    if any(filename.lower().endswith(fmt) for fmt in self.config.supported_formats):
-                        full_path = os.path.join(root, filename)
-                        display_name = get_track_name_from_file(full_path)
-                        files.append({
-                            'path': full_path,
-                            'name': filename,
-                            'relative': os.path.relpath(full_path, self.config.music_folder),
-                            'display_name': display_name
-                        })
-            
-            files.sort(key=lambda x: x['display_name'].lower())
-            self.sorted_music_paths = [f['path'] for f in files]
-            self.sorted_music_files = files
-            
+            files = scan_music_folder_files(self.config)
         except Exception as e:
             self.log(self.tr.t('error_scanning_folder').format(str(e)), is_error=True)
-        
+            files = []
+        self.sorted_music_files = files
+        self.sorted_music_paths = [f['path'] for f in files]
         return files
     
     def get_all_music_files(self):
@@ -2403,23 +2292,7 @@ class DiscordBotThread(QThread):
         voice_client = await self.ensure_voice_connection(ctx)
         if not voice_client:
             return
-
-        from discord import opus as _opus_check
-
-        if not _opus_check.is_loaded():
-            ensure_discord_opus_loaded(lambda m: self.log(m, is_error=True))
-        if not _opus_check.is_loaded():
-            self.log(self.tr.t("opus_missing_log"), is_error=True)
-            await ctx.send(self.tr.t("opus_missing_discord"))
-            next_track_info = self.queues[guild_id].get_next_track()
-            if next_track_info[0]:
-                await self.play_audio(ctx, next_track_info[0], next_track_info[1])
-            elif self.config.autoplay_enabled and self.is_running:
-                next_song = self.get_next_auto_song(guild_id)
-                if next_song:
-                    await self.play_audio(ctx, next_song, is_user=False)
-            return
-
+            
         if guild_id not in self.played_history:
             self.played_history[guild_id] = []
         self.played_history[guild_id].append(file_path)
@@ -2442,7 +2315,7 @@ class DiscordBotThread(QThread):
         
         def play_next(error=None):
             if error:
-                self.log(self.tr.t('playback_error_log').format(_format_voice_error(error)), is_error=True)
+                self.log(self.tr.t('playback_error_log').format(str(error)), is_error=True)
             saved_ctx = self.contexts.get(guild_id)
             if not saved_ctx:
                 self.log(self.tr.t('context_not_found').format(guild_id))
@@ -2525,10 +2398,8 @@ class DiscordBotThread(QThread):
             self.log(self.tr.t('playing').format(display_name, queue_status))
             await ctx.send(self.tr.t('now_playing_discord').format(display_name))
         except Exception as e:
-            err_log = _format_voice_error(e, 900)
-            err_discord = _format_voice_error(e, 450)
-            self.log(self.tr.t('playback_error_log').format(err_log), is_error=True)
-            await ctx.send(self.tr.t('playback_error_log').format(err_discord))
+            self.log(self.tr.t('playback_error_log').format(str(e)), is_error=True)
+            await ctx.send(self.tr.t('playback_error'))
             next_track_info = self.queues[guild_id].get_next_track()
             if next_track_info[0]:
                 await self.play_audio(ctx, next_track_info[0], next_track_info[1])
@@ -2737,6 +2608,23 @@ class DiscordBotThread(QThread):
                 self.log(self.tr.t('auto_mode_log').format(mode_text))
             self.log(self.tr.t('volume_log').format(int(self.config.volume * 100)))
             
+            # Сразу помечаем бота готовым и отдаём сигнал в GUI — кнопка СТОП не ждёт сканирования и sync.
+            self._ready = True
+            guilds_data = self.get_guilds_and_channels()
+            self.guilds_updated.emit(guilds_data)
+            self.status_changed.emit(True)
+            self.bot_info_signal.emit(self.bot_name, self.config.autoplay_enabled)
+            
+            try:
+                files = await asyncio.to_thread(scan_music_folder_files, self.config)
+            except Exception as e:
+                self.log(self.tr.t('error_scanning_folder').format(str(e)), is_error=True)
+                files = []
+            self.sorted_music_files = files
+            self.sorted_music_paths = [f['path'] for f in files]
+            self.music_list_updated.emit(files)
+            self.log(self.tr.t('found_files_log').format(len(files)))
+            
             if self.config.auto_connect_enabled:
                 self.log(self.tr.t('auto_connect_enabled'))
                 await self.auto_connect_to_channel()
@@ -2747,15 +2635,6 @@ class DiscordBotThread(QThread):
                 self.log(self.tr.t('log_slash_synced').format(len(synced)))
             except Exception as e:
                 self.log(self.tr.t('log_slash_sync_fail').format(e), is_error=True)
-            files = self.get_sorted_music_files()
-            self.music_list_updated.emit(files)
-            self.log(self.tr.t('found_files_log').format(len(files)))
-            self.status_changed.emit(True)
-            self.bot_info_signal.emit(self.bot_name, self.config.autoplay_enabled)
-            
-            self._ready = True
-            guilds_data = self.get_guilds_and_channels()
-            self.guilds_updated.emit(guilds_data)
         
         @self.bot.event
         async def on_voice_state_update(member, before, after):
@@ -3997,8 +3876,8 @@ class DiscordBotThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        # Иконка окна — из сборки (MEIPASS) или icon.ico рядом с .exe
-        _icon_path = bundled_asset_path("icon.ico")
+        # Иконка окна — встроенная в .exe (PyInstaller) или icon.ico рядом с .exe
+        _icon_path = resolve_icon_path()
         _app_icon = QIcon(_icon_path) if os.path.isfile(_icon_path) else QIcon()
         self.setWindowIcon(_app_icon)
 
@@ -4028,6 +3907,8 @@ class MainWindow(QMainWindow):
         self.total_duration = 0
         self.bot_name = None
         self.cached_music_files = []
+        self._starting_bot = False
+        self._stopping_bot = False
         
         self.loaded_guild_id = None
         self.loaded_voice_channel_id = None
@@ -4121,8 +4002,9 @@ class MainWindow(QMainWindow):
             self.now_playing_label.setText(self.tr.t('not_playing'))
         self.time_elapsed_label.setText(self.tr.t('time_elapsed'))
         self.time_total_label.setText(self.tr.t('time_total'))
-        self.status_text.setText(self.tr.t('bot_running') if self.bot_thread and self.bot_thread.is_running else self.tr.t('bot_stopped_status'))
-        self.bot_control_btn.setText(self.tr.t('stop') if self.bot_thread and self.bot_thread.is_running else self.tr.t('start'))
+        online = self._bot_ui_considered_online()
+        self.status_text.setText(self.tr.t('bot_running') if online else self.tr.t('bot_stopped_status'))
+        self.bot_control_btn.setText(self.tr.t('stop') if online else self.tr.t('start'))
         self.playback_control_btn.setText(self.tr.t('resume') if self.is_paused else self.tr.t('pause'))
         self.skip_btn.setText(self.tr.t('skip'))
         self.clear_queue_btn.setText(self.tr.t('clear_queue'))
@@ -6326,25 +6208,39 @@ class MainWindow(QMainWindow):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.errors_text.setTextCursor(cursor)
     
+    def _bot_ui_considered_online(self):
+        """Бот в Discord готов (on_ready), не в фазе подключения после нажатия Старт."""
+        return (
+            self.bot_thread is not None
+            and not self._starting_bot
+            and self.bot_thread.is_running
+        )
+
     def update_bot_status(self, is_running):
         if is_running:
+            self._starting_bot = False
             self.status_light.setStyleSheet("color: #4CAF50; font-size: 16px;")
             self.status_text.setText(self.tr.t('bot_running'))
             self.bot_control_btn.setText(self.tr.t('stop'))
             self.bot_control_btn.default_color = "#c2160a"
             self.bot_control_btn.hover_color = "#f43325"
             self.bot_control_btn.update_style()
+            self.bot_control_btn.setEnabled(True)
             self.server_combo.setEnabled(True)
             self.voice_channel_combo.setEnabled(True)
             self.text_channel_combo.setEnabled(True)
             self.refresh_channels_btn.setEnabled(True)
         else:
+            if self._starting_bot:
+                self._starting_bot = False
             self.status_light.setStyleSheet("color: #ff6b6b; font-size: 16px;")
             self.status_text.setText(self.tr.t('bot_stopped_status'))
             self.bot_control_btn.setText(self.tr.t('start'))
             self.bot_control_btn.default_color = "#00802b"  
             self.bot_control_btn.hover_color = "#00cc44"
             self.bot_control_btn.update_style()
+            if not self._stopping_bot:
+                self.bot_control_btn.setEnabled(True)
             self.playback_control_btn.setEnabled(False)
             self.skip_btn.setEnabled(False)
             self.clear_queue_btn.setEnabled(False)
@@ -6375,6 +6271,8 @@ class MainWindow(QMainWindow):
         if not self.music_folder_display.text() or not os.path.exists(self.music_folder_display.text()):
             QMessageBox.warning(self, self.tr.t('error'), self.tr.t('select_folder'))
             return
+        self._starting_bot = True
+        self.bot_control_btn.setEnabled(False)
         self.save_settings()
         self.bot_thread = DiscordBotThread(self.config, self.tr)
         self.bot_thread.log_signal.connect(self.log_message)
@@ -6404,10 +6302,13 @@ class MainWindow(QMainWindow):
     
     def stop_bot(self):
         if self.bot_thread:
+            self._stopping_bot = True
+            self.bot_control_btn.setEnabled(False)
             self.bot_thread.stop()
             self.bot_thread.quit()
             self.bot_thread.wait(3000)
             self.bot_thread = None
+        self._stopping_bot = False
         self.update_bot_status(False)
         self.log_message(self.tr.t('bot_stopped'))
     
@@ -6494,7 +6395,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     # Иконка в панели задач / трее
-    _icon_path = bundled_asset_path("icon.ico")
+    _icon_path = resolve_icon_path()
     if os.path.isfile(_icon_path):
         app.setWindowIcon(QIcon(_icon_path))
     app.setStyleSheet("""
