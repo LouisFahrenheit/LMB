@@ -30,7 +30,7 @@ from io import BytesIO
 from typing import Optional
 
 CONFIG_FILE = "bot_settings.json"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 LOG_FILE_NAME = "local_music_bot.log"
 LOG_MAX_BYTES = 2 * 1024 * 1024
@@ -137,8 +137,10 @@ def set_taskbar_icon(icon_path):
         import ctypes.wintypes
 
         # Уникальный App User Model ID — Windows группирует кнопки taskbar по нему
-        app_id = "LocalMusicBot.App.1.0"
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+        app_id = "LocalMusicBot.App.{APP_VERSION}"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            app_id.format(APP_VERSION=APP_VERSION)
+        )
 
         if not os.path.isfile(icon_path):
             return
@@ -420,8 +422,7 @@ class Translator:
                 'stop_command_issued': '⏹️ Команда stop - пропускаем автоплейлист',
                 'no_tracks_autoplay': '📭 Нет треков для автоплейлиста',
                 'playback_finished': '⏹️ Воспроизведение завершено',
-                'queue_status': ' | Очередь: {} польз. + {} авто',
-                'playing': '▶️ Играет: {} {}',
+                'playing': '▶️ Играет: {}',
                 'skipping_log': '⏭️ Пропускаю: {}',
                 'stopped_and_cleared_log': '⏹️ Остановлено и очереди очищены',
                 'queue_cleared_log': '🧹 Очередь очищена (удалено: {} песен)',
@@ -548,6 +549,9 @@ class Translator:
                 # Исключение повторов
                 'exclude_repeats': "Исключать повторы песен",
                 'exclude_repeats_desc': "Создавать временный список из всех песен для воспроизведения без повторов",
+                'startup_song_label': "Стартовый трек",
+                'startup_song_file': "Аудио для старта",
+                'startup_song_open_tooltip': "Показать файл в проводнике",
                 'playlist_reset': "✔️ Создан новый плейлист без повторов",
                 'all_songs_played': "Все песни сыграны, начинаем новый цикл",
                 
@@ -835,8 +839,7 @@ class Translator:
                 'stop_command_issued': '⏹️ Stop command - skipping autoplay',
                 'no_tracks_autoplay': '📭 No tracks for autoplay',
                 'playback_finished': '⏹️ Playback finished',
-                'queue_status': ' | Queue: {} user + {} auto',
-                'playing': '▶️ Playing: {} {}',
+                'playing': '▶️ Playing: {}',
                 'skipping_log': '⏭️ Skipping: {}',
                 'stopped_and_cleared_log': '⏹️ Stopped and queues cleared',
                 'queue_cleared_log': '🧹 Queue cleared (removed: {} tracks)',
@@ -963,6 +966,9 @@ class Translator:
                 # Исключение повторов
                 'exclude_repeats': "Exclude repeats",
                 'exclude_repeats_desc': "Create temporary playlist of all songs to play without repeats",
+                'startup_song_label': "Startup track",
+                'startup_song_file': "Startup audio file",
+                'startup_song_open_tooltip': "Show in folder",
                 'playlist_reset': "✔️ New no-repeat playlist created",
                 'all_songs_played': "All songs played, starting new cycle",
                 
@@ -1664,6 +1670,7 @@ class BotConfig:
         # Действие при пустом канале
         self.empty_channel_action = "pause"   # "none" | "pause" | "disconnect"
         self.empty_channel_timeout = 1        # минут до действия
+        self.startup_song_path = ""           # первый трек при подключении к голосу (пусто = выкл.)
 
     def save_to_file(self, filename=CONFIG_FILE):
         data = {
@@ -1698,6 +1705,7 @@ class BotConfig:
             # Пустой канал
             'empty_channel_action': self.empty_channel_action,
             'empty_channel_timeout': self.empty_channel_timeout,
+            'startup_song_path': self.startup_song_path.replace('\\', '/') if self.startup_song_path else '',
         }
         try:
             with open(filename, 'w', encoding='utf-8') as f:
@@ -1741,6 +1749,7 @@ class BotConfig:
                     # Пустой канал
                     self.empty_channel_action = data.get('empty_channel_action', 'pause')
                     self.empty_channel_timeout = data.get('empty_channel_timeout', 1)
+                    self.startup_song_path = data.get('startup_song_path', '')
                 return True
             except Exception:
                 pass
@@ -2170,16 +2179,19 @@ class DiscordBotThread(QThread):
         try:
             if not ctx.author.voice:
                 await ctx.send(self.tr.t('not_in_voice'))
-                return None
+                return None, False
             voice_client = ctx.guild.voice_client
+            joined_fresh = False
             if not voice_client:
                 voice_client = await ctx.author.voice.channel.connect()
+                joined_fresh = True
             elif voice_client.channel != ctx.author.voice.channel:
                 await voice_client.move_to(ctx.author.voice.channel)
-            return voice_client
+                joined_fresh = True
+            return voice_client, joined_fresh
         except Exception as e:
             self.log(f"❌ Connection error: {str(e)}", is_error=True)
-            return None
+            return None, False
     
     async def auto_connect_to_channel(self):
         if not self.config.auto_connect_enabled:
@@ -2243,7 +2255,21 @@ class DiscordBotThread(QThread):
             if self.config.autoplay_enabled and not self.session_keep_paused:
                 random_song = self.get_next_auto_song(guild.id)
                 if random_song:
-                    await self.play_audio(ctx, random_song, is_user=False)
+                    sp = (self.config.startup_song_path or "").strip()
+                    if sp and os.path.isfile(sp):
+                        if guild.id not in self.queues:
+                            self.queues[guild.id] = PlaylistQueue()
+                        try:
+                            same = os.path.normcase(os.path.abspath(sp)) == os.path.normcase(os.path.abspath(random_song))
+                        except Exception:
+                            same = False
+                        if same:
+                            await self.play_audio(ctx, random_song, is_user=False)
+                        else:
+                            self.queues[guild.id].add_auto_track(random_song)
+                            await self.play_audio(ctx, sp, is_user=True)
+                    else:
+                        await self.play_audio(ctx, random_song, is_user=False)
             
             return True
             
@@ -2289,9 +2315,24 @@ class DiscordBotThread(QThread):
                     await self.play_audio(ctx, next_song, is_user=False)
             return
             
-        voice_client = await self.ensure_voice_connection(ctx)
+        voice_client, joined_fresh = await self.ensure_voice_connection(ctx)
         if not voice_client:
             return
+        
+        sp = (self.config.startup_song_path or "").strip()
+        if joined_fresh and sp and os.path.isfile(sp) and not force_play:
+            try:
+                same = os.path.normcase(os.path.abspath(sp)) == os.path.normcase(os.path.abspath(file_path))
+            except Exception:
+                same = False
+            if not same:
+                if is_user:
+                    self.queues[guild_id].add_user_track(file_path)
+                else:
+                    self.queues[guild_id].add_auto_track(file_path)
+                file_path = sp
+                is_user = True
+                display_name = get_track_name_from_file(file_path)
             
         if guild_id not in self.played_history:
             self.played_history[guild_id] = []
@@ -2393,9 +2434,7 @@ class DiscordBotThread(QThread):
                 self.pause_state_signal.emit(False)
             if self.loop and self.loop.is_running():
                 self.loop.call_soon_threadsafe(update_progress)
-            queue_info = self.queues[guild_id].get_queue_info()
-            queue_status = self.tr.t('queue_status').format(queue_info['user'], queue_info['auto']) if queue_info['user'] > 0 or queue_info['auto'] > 0 else ""
-            self.log(self.tr.t('playing').format(display_name, queue_status))
+            self.log(self.tr.t('playing').format(display_name))
             await ctx.send(self.tr.t('now_playing_discord').format(display_name))
         except Exception as e:
             self.log(self.tr.t('playback_error_log').format(str(e)), is_error=True)
@@ -3874,6 +3913,9 @@ class DiscordBotThread(QThread):
         self.status_changed.emit(False)
 
 class MainWindow(QMainWindow):
+    # Для EmittingStream: в sys.stdout/stderr нужен pyqtSignal, не слот (у метода нет .emit).
+    _console_stream_signal = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         # Иконка окна — встроенная в .exe (PyInstaller) или icon.ico рядом с .exe
@@ -3968,9 +4010,10 @@ class MainWindow(QMainWindow):
 
         self.init_ui()
         self.load_settings()
-        
-        sys.stdout = EmittingStream(self.python_output)
-        sys.stderr = EmittingStream(self.python_output)
+
+        self._console_stream_signal.connect(self.python_output)
+        sys.stdout = EmittingStream(self._console_stream_signal)
+        sys.stderr = EmittingStream(self._console_stream_signal)
         
         QTimer.singleShot(100, self.check_autostart)
         # Применяем иконку в панели задач Windows после отрисовки окна
@@ -4045,6 +4088,12 @@ class MainWindow(QMainWindow):
             self.wallpaper_file_label.setText(self.tr.t('wallpaper_file'))
         if hasattr(self, 'wallpaper_browse_btn'):
             self.wallpaper_browse_btn.setText(self.tr.t('browse'))
+        if hasattr(self, 'startup_song_label'):
+            self.startup_song_label.setText(self.tr.t('startup_song_label'))
+        if hasattr(self, 'startup_song_browse_btn'):
+            self.startup_song_browse_btn.setText(self.tr.t('browse'))
+        if hasattr(self, 'startup_song_path_display'):
+            self.startup_song_path_display.set_tooltip_hint(self.tr.t('startup_song_open_tooltip'))
         self.exclude_repeats_check.setText(self.tr.t('exclude_repeats'))
         self.exclude_repeats_check.setToolTip(self.tr.t('exclude_repeats_desc'))
         
@@ -4851,6 +4900,34 @@ class MainWindow(QMainWindow):
         mode_row.addStretch()
         lay_lib.addLayout(mode_row)
 
+        startup_row = QHBoxLayout()
+        self.startup_song_label = QLabel(self.tr.t('startup_song_label'))
+        self.startup_song_label.setStyleSheet("color: #e0e0e0;")
+        self.startup_song_label.setMinimumWidth(_set_lbl_w)
+        self.startup_song_label.setAlignment(_set_la)
+        startup_row.addWidget(self.startup_song_label)
+        self.startup_song_path_display = ClickablePathLabel()
+        self.startup_song_path_display.setMinimumHeight(_set_path_h)
+        self.startup_song_path_display.setText(self.config.startup_song_path or "")
+        self.startup_song_path_display.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.startup_song_path_display.clicked.connect(self.open_startup_song_path_from_settings)
+        self.startup_song_path_display.setStyleSheet("""
+            QLabel {
+                background-color: #3c3c3c;
+                color: #e0e0e0;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 4px 6px;
+            }
+        """)
+        startup_row.addWidget(self.startup_song_path_display, 1)
+        self.startup_song_browse_btn = ModernButton(self.tr.t('browse'), color="#3c3c3c", hover_color="#4a4a4a")
+        self.startup_song_browse_btn.setFixedWidth(_set_btn_w)
+        self.startup_song_browse_btn.clicked.connect(self.browse_startup_song)
+        startup_row.addWidget(self.startup_song_browse_btn)
+        lay_lib.addLayout(startup_row)
+        self.startup_song_path_display.set_tooltip_hint(self.tr.t('startup_song_open_tooltip'))
+
         self.settings_group_library.setLayout(lay_lib)
         scroll_layout.addWidget(self.settings_group_library)
         
@@ -5535,6 +5612,12 @@ class MainWindow(QMainWindow):
                 self.ffmpeg_display.set_tooltip_hint(self.tr.t('ffmpeg_open_tooltip'))
             if hasattr(self, 'wallpaper_path_display'):
                 self.wallpaper_path_display.set_tooltip_hint(self.tr.t('wallpaper_open_tooltip'))
+            if hasattr(self, 'startup_song_label'):
+                self.startup_song_label.setText(self.tr.t('startup_song_label'))
+            if hasattr(self, 'startup_song_browse_btn'):
+                self.startup_song_browse_btn.setText(self.tr.t('browse'))
+            if hasattr(self, 'startup_song_path_display'):
+                self.startup_song_path_display.set_tooltip_hint(self.tr.t('startup_song_open_tooltip'))
             if hasattr(self, 'music_folder_display'):
                 self.music_folder_display.set_tooltip_hint(self.tr.t('music_folder_open_tooltip'))
             self.exclude_repeats_check.setText(self.tr.t('exclude_repeats'))
@@ -5782,6 +5865,40 @@ class MainWindow(QMainWindow):
             return
         QMessageBox.warning(self, self.tr.t('error'), self.tr.t('folder_not_found'))
 
+    def open_startup_song_path_from_settings(self):
+        if not hasattr(self, 'startup_song_path_display'):
+            return
+        p = self.startup_song_path_display.text().strip()
+        if not p:
+            QMessageBox.warning(self, self.tr.t('error'), self.tr.t('folder_not_found'))
+            return
+        p_norm = os.path.normpath(p.replace('/', os.sep))
+        if os.path.isfile(p_norm):
+            folder = os.path.dirname(p_norm)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+            return
+        QMessageBox.warning(self, self.tr.t('error'), self.tr.t('folder_not_found'))
+
+    def browse_startup_song(self):
+        if not hasattr(self, 'startup_song_path_display'):
+            return
+        start_dir = ""
+        p = self.startup_song_path_display.text().strip()
+        if p and os.path.isfile(p):
+            start_dir = os.path.dirname(p)
+        elif self.config.music_folder and os.path.isdir(self.config.music_folder):
+            start_dir = self.config.music_folder
+        patterns = " ".join("*" + ext for ext in self.config.supported_formats)
+        file, _ = QFileDialog.getOpenFileName(
+            self, self.tr.t('startup_song_file'),
+            start_dir,
+            f"Audio ({patterns});;All files (*.*)"
+        )
+        if file:
+            file = file.replace('\\', '/')
+            self.startup_song_path_display.setText(file)
+            self.save_settings()
+
     def browse_music_folder(self):
         folder = QFileDialog.getExistingDirectory(self, self.tr.t('music_folder'))
         if folder:
@@ -5949,6 +6066,8 @@ class MainWindow(QMainWindow):
         self.config.exclude_repeats = self.exclude_repeats_check.isChecked()
         self.config.wallpaper_enabled = self.wallpaper_enable_check.isChecked()
         self.config.wallpaper_path = self.wallpaper_path_display.text().strip()
+        if hasattr(self, 'startup_song_path_display'):
+            self.config.startup_song_path = self.startup_song_path_display.text().strip()
         self.update_music_wallpaper_appearance()
         
         # Ролевая защита
@@ -6048,6 +6167,8 @@ class MainWindow(QMainWindow):
             self.show_album_art_check.setChecked(self.config.show_album_art)
             self.wallpaper_enable_check.setChecked(self.config.wallpaper_enabled)
             self.wallpaper_path_display.setText(self.config.wallpaper_path or "")
+            if hasattr(self, 'startup_song_path_display'):
+                self.startup_song_path_display.setText(self.config.startup_song_path or "")
             self.exclude_repeats_check.setChecked(self.config.exclude_repeats)
             
             # Ролевая защита - загрузка
