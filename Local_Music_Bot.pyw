@@ -1099,10 +1099,10 @@ def get_track_name_from_file(file_path):
                 return title
             else:
                 filename = os.path.basename(file_path)
-                return re.sub(r'^\d+[\s\.\-_]*', '', os.path.splitext(filename)[0]).strip() or os.path.splitext(filename)[0]
+                return os.path.splitext(filename)[0]
     except Exception:
         filename = os.path.basename(file_path)
-        return re.sub(r'^\d+[\s\.\-_]*', '', os.path.splitext(filename)[0]).strip() or os.path.splitext(filename)[0]
+        return os.path.splitext(filename)[0]
 
 
 def scan_music_folder_files(config):
@@ -2805,7 +2805,7 @@ class DiscordBotThread(QThread):
                     await ctx.send(self.tr.t('no_tracks'))
                 return
             all_files = self.get_all_music_files()
-            matches = [f for f in all_files if query.lower() in f['display_name'].lower()]
+            matches = [f for f in all_files if query.lower() in f['display_name'].lower() or query.lower() in f['relative'].lower()]
             if not matches:
                 await ctx.send(self.tr.t('tracks_not_found').format(query))
                 return
@@ -3688,7 +3688,7 @@ class DiscordBotThread(QThread):
             q = request.rel_url.query.get('q', '').lower()
             files = self.get_all_music_files()
             result = [{'name': f['display_name'], 'path': f['path']}
-                      for f in files if not q or q in f['display_name'].lower()]
+                      for f in files if not q or q in f['display_name'].lower() or q in f['relative'].lower()]
             return aio_web.Response(text=_json.dumps(result, ensure_ascii=False),
                                     content_type='application/json')
 
@@ -6270,8 +6270,27 @@ class MainWindow(QMainWindow):
     
     def filter_music_list(self):
         search = self.search_input.text().lower()
-        for i in range(self.music_list.count()):
-            self.music_list.item(i).setHidden(search not in self.music_list.item(i).text().lower())
+        visible_count = 0
+        if not hasattr(self, 'cached_music_files'):
+            for i in range(self.music_list.count()):
+                match = search in self.music_list.item(i).text().lower()
+                self.music_list.item(i).setHidden(not match)
+                if match: visible_count += 1
+        else:
+            for i in range(self.music_list.count()):
+                if i < len(self.cached_music_files):
+                    f = self.cached_music_files[i]
+                    match = search in f['display_name'].lower() or search in f['relative'].lower()
+                else:
+                    match = search in self.music_list.item(i).text().lower()
+                self.music_list.item(i).setHidden(not match)
+                if match: visible_count += 1
+                
+        total = self.music_list.count()
+        if search:
+            self.music_stats.setText(self.tr.t('total_files').format(total) + " | " + self.tr.t('found_files').format(visible_count))
+        else:
+            self.music_stats.setText(self.tr.t('total_files').format(total))
     
     def play_selected(self, item):
         if not self.bot_thread or not self.bot_thread.is_running:
