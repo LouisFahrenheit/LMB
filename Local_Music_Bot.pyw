@@ -30,7 +30,7 @@ from io import BytesIO
 from typing import Optional
 
 CONFIG_FILE = "bot_settings.json"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 
 LOG_FILE_NAME = "local_music_bot.log"
 LOG_MAX_BYTES = 2 * 1024 * 1024
