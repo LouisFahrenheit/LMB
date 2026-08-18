@@ -8,11 +8,12 @@
 <img src="Screenshots/Demo-1.png" width="900">
 ### Features
 
-- Play tracks from a folder, search by filename, or pick a random track  
+- Play tracks from a folder, search by tags/filename, or pick a random track  
 - Queue, skip, pause, volume, clear queue  
 - Autoplay: **shuffle** or **sequential**
 - Chat commands: **`!`** prefix and **`/`** slash commands 
 - Optional **autostart** and **auto-connect** to a chosen voice channel  
+- **Follow Users** feature to automatically switch voice channels alongside you
 - **Role-based** restrictions on who can use stop, delete-from-disk, etc.  
 - Optional **web UI** for control over your local network  
 - All bot setup in the app window: token, music folder, FFmpeg, channels  
@@ -42,11 +43,12 @@ Then enter your **bot token** and **music folder** and start the bot from the ap
 
 ### Возможности
 
-- Играть треки из папки, искать по названию файла или включить случайный трек  
+- Играть треки из папки, искать по тегам/имени файла или включить случайный трек  
 - Очередь, пауза, громкость
 - Автоплейлист: **перемешивание** или **по порядку** 
 - Команды в чате: префикс **`!`** и **слэш-команды** **`/`**  
 - **Автозапуск** программы и **автоподключение** к выбранному голосовому каналу  
+- Функция **Следования за пользователем** — бот прыгает по каналам вместе с вами
 - Ограничение команд по **ролям** на сервере  
 - Опциональный **веб-интерфейс** для управления по локальной сети  
 - Вся настройка бота — через окно программы  
@@ -82,7 +84,7 @@ pip install -r requirements.txt
 pythonw Local_Music_Bot.pyw    # use python … for console output
 ```
 
-**Build:** `pip install -r requirements-build.txt`, then `pyinstaller --noconfirm --clean LocalMusicBot.spec` → `dist/LMB.exe`. For the release ZIP (`Local_Music_Bot_<version>/LMB.exe`, version from `APP_VERSION` in the `.pyw`), run `python build_release.py`.
+**Build:** `pip install -r requirements-build.txt`, then `pyinstaller --noconfirm --clean LocalMusicBot.spec` → `dist/LMB.exe`. For the release ZIP (`Local_Music_Bot_<version>/LMB.exe`, version from `APP_VERSION` in the `.pyw`), run `python build_release.py`. A GitHub Action is also configured to automatically compile and attach the `.exe` upon publishing a release.
 
 ---
 Repository: [github.com/LouisFahrenheit/LMB](https://github.com/LouisFahrenheit/LMB) 
