@@ -587,6 +587,13 @@ class Translator:
                 'empty_ch_disconnect': "Отключиться",
                 'empty_ch_timeout_lbl': "через (мин):",
                 'empty_ch_hint': "Пауза: возобновит автоматически когда кто-то вернётся в канал",
+                'follow_mode_lbl': "Следовать за пользователем:",
+                'follow_mode_0': "Выкл",
+                'follow_mode_1': "За последним уходящим",
+                'follow_mode_2': "За конкретным:",
+                'follow_user_id_ph': "ID / Имя пользователя",
+                'log_follow_moving': "Следование за пользователем {} -> {}",
+                'log_follow_error': "Ошибка при следовании за пользователем: {}",
                 'web_enable': "Web-интерфейс",
                 'web_port_lbl': "Порт:",
                 'web_open_btn': "Открыть",
@@ -1004,6 +1011,13 @@ class Translator:
                 'empty_ch_disconnect': "Disconnect",
                 'empty_ch_timeout_lbl': "after (min):",
                 'empty_ch_hint': "Pause: resumes automatically when someone returns",
+                'follow_mode_lbl': "Follow user:",
+                'follow_mode_0': "Disabled",
+                'follow_mode_1': "Last user leaving",
+                'follow_mode_2': "Specific user:",
+                'follow_user_id_ph': "User ID or Username",
+                'log_follow_moving': "Moving to follow {} -> {}",
+                'log_follow_error': "Error following user: {}",
                 'web_enable': "Web interface",
                 'web_port_lbl': "Port:",
                 'web_open_btn': "Open",
@@ -1671,7 +1685,10 @@ class BotConfig:
         self.empty_channel_action = "pause"   # "none" | "pause" | "disconnect"
         self.empty_channel_timeout = 1        # минут до действия
         self.startup_song_path = ""           # первый трек при подключении к голосу (пусто = выкл.)
-
+        
+        # Follow Users
+        self.follow_mode = 0                  # 0: None, 1: Last User, 2: Specific User
+        self.follow_user_id = ""              # User ID to follow in mode 2
     def save_to_file(self, filename=CONFIG_FILE):
         data = {
             'token': self.token,
@@ -1706,6 +1723,8 @@ class BotConfig:
             'empty_channel_action': self.empty_channel_action,
             'empty_channel_timeout': self.empty_channel_timeout,
             'startup_song_path': self.startup_song_path.replace('\\', '/') if self.startup_song_path else '',
+            'follow_mode': self.follow_mode,
+            'follow_user_id': self.follow_user_id,
         }
         try:
             with open(filename, 'w', encoding='utf-8') as f:
@@ -1750,6 +1769,8 @@ class BotConfig:
                     self.empty_channel_action = data.get('empty_channel_action', 'pause')
                     self.empty_channel_timeout = data.get('empty_channel_timeout', 1)
                     self.startup_song_path = data.get('startup_song_path', '')
+                    self.follow_mode = data.get('follow_mode', 0)
+                    self.follow_user_id = data.get('follow_user_id', '')
                 return True
             except Exception:
                 pass
@@ -2208,6 +2229,21 @@ class DiscordBotThread(QThread):
                 return False
             
             voice_channel = guild.get_channel(int(self.config.default_voice_channel_id))
+            
+            if self.config.follow_mode == 2 and self.config.follow_user_id:
+                uid = self.config.follow_user_id.lower()
+                found_vc = None
+                for vc in guild.voice_channels:
+                    for member in vc.members:
+                        if str(member.id) == uid or member.name.lower() == uid or member.display_name.lower() == uid:
+                            found_vc = vc
+                            self.log(self.tr.t("log_follow_moving").format(member.display_name, vc.name))
+                            break
+                    if found_vc:
+                        break
+                if found_vc:
+                    voice_channel = found_vc
+                    
             if not voice_channel:
                 self.log("⚠️ " + self.tr.t('selected_channel_not_found'))
                 return False
@@ -2716,7 +2752,7 @@ class DiscordBotThread(QThread):
                 return
 
             # ── Обработка движений ПОЛЬЗОВАТЕЛЕЙ ────────────────────────
-            if self.config.empty_channel_action == "none":
+            if self.config.empty_channel_action == "none" and self.config.follow_mode == 0:
                 return
 
             vc = guild.voice_client
@@ -2727,7 +2763,26 @@ class DiscordBotThread(QThread):
             if (before.channel is not None and before.channel == vc.channel
                     and (after.channel is None or after.channel != vc.channel)):
                 humans = [m for m in vc.channel.members if not m.bot]
-                if not humans:
+                
+                # ── Follow Mode Logic ────────────────────────────────────
+                follow = False
+                if after.channel is not None:
+                    if self.config.follow_mode == 1 and not humans:
+                        follow = True
+                    elif self.config.follow_mode == 2 and self.config.follow_user_id:
+                        uid = self.config.follow_user_id.lower()
+                        if str(member.id) == uid or member.name.lower() == uid or member.display_name.lower() == uid:
+                            follow = True
+                
+                if follow:
+                    self.log(self.tr.t("log_follow_moving").format(member.display_name, after.channel.name))
+                    try:
+                        await vc.move_to(after.channel)
+                    except Exception as e:
+                        self.log(self.tr.t("log_follow_error").format(e), is_error=True)
+                    return
+                
+                if not humans and self.config.empty_channel_action != "none":
                     # Канал опустел — запускаем таймер
                     old_task = self._empty_channel_tasks.pop(guild_id, None)
                     if old_task:
@@ -5163,6 +5218,44 @@ class MainWindow(QMainWindow):
         self.empty_ch_hint_label.setWordWrap(True)
         lay_beh.addWidget(self.empty_ch_hint_label)
 
+        # ── Follow Users ─────────────────────────────────────────────────
+        follow_row = QHBoxLayout()
+        self.follow_mode_label = QLabel(self.tr.t("follow_mode_lbl"))
+        self.follow_mode_label.setStyleSheet("color:#e0e0e0;")
+        follow_row.addWidget(self.follow_mode_label)
+        
+        self.follow_mode_combo = QComboBox()
+        self.follow_mode_combo.addItems([
+            self.tr.t("follow_mode_0"), 
+            self.tr.t("follow_mode_1"), 
+            self.tr.t("follow_mode_2")
+        ])
+        self.follow_mode_combo.setCurrentIndex(self.config.follow_mode)
+        self.follow_mode_combo.currentIndexChanged.connect(self.on_setting_changed)
+        self.follow_mode_combo.setStyleSheet("""
+            QComboBox{background:#3c3c3c;color:white;border:1px solid #555;border-radius:3px;padding:5px;}
+            QComboBox::drop-down{border:none;}
+            QComboBox::down-arrow{image:none;border-left:4px solid transparent;
+                border-right:4px solid transparent;border-top:4px solid #888;margin-right:5px;}
+        """)
+        _compact_settings_combo(self.follow_mode_combo)
+        follow_row.addWidget(self.follow_mode_combo)
+        
+        self.follow_user_id_input = QLineEdit(self.config.follow_user_id)
+        self.follow_user_id_input.setPlaceholderText(self.tr.t("follow_user_id_ph"))
+        self.follow_user_id_input.textChanged.connect(self.on_setting_changed)
+        self.follow_user_id_input.setStyleSheet(_input_style)
+        self.follow_user_id_input.setFixedWidth(150)
+        follow_row.addWidget(self.follow_user_id_input)
+        
+        def _toggle_follow_id():
+            self.follow_user_id_input.setVisible(self.follow_mode_combo.currentIndex() == 2)
+        self.follow_mode_combo.currentIndexChanged.connect(_toggle_follow_id)
+        _toggle_follow_id()
+        
+        follow_row.addStretch()
+        lay_beh.addLayout(follow_row)
+
         lay_disc.addLayout(lay_beh)
         self.settings_group_discord.setLayout(lay_disc)
         scroll_layout.addWidget(self.settings_group_discord)
@@ -5672,6 +5765,21 @@ class MainWindow(QMainWindow):
                 ])
                 self.empty_ch_action_combo.setCurrentIndex(_cur)
                 self.empty_ch_action_combo.blockSignals(False)
+            if hasattr(self, 'follow_mode_label'):
+                self.follow_mode_label.setText(self.tr.t('follow_mode_lbl'))
+            if hasattr(self, 'follow_mode_combo'):
+                _cur = self.follow_mode_combo.currentIndex()
+                self.follow_mode_combo.blockSignals(True)
+                self.follow_mode_combo.clear()
+                self.follow_mode_combo.addItems([
+                    self.tr.t('follow_mode_0'),
+                    self.tr.t('follow_mode_1'),
+                    self.tr.t('follow_mode_2'),
+                ])
+                self.follow_mode_combo.setCurrentIndex(_cur)
+                self.follow_mode_combo.blockSignals(False)
+            if hasattr(self, 'follow_user_id_input'):
+                self.follow_user_id_input.setPlaceholderText(self.tr.t('follow_user_id_ph'))
             # Tray actions
             if hasattr(self, '_tray_show_action') and self._tray_show_action:
                 self._tray_show_action.setText(self.tr.t('tray_show'))
@@ -6113,6 +6221,9 @@ class MainWindow(QMainWindow):
             self.config.empty_channel_timeout = max(1, int(self.empty_ch_timeout_input.text()))
         except ValueError:
             self.config.empty_channel_timeout = 1
+        
+        self.config.follow_mode = self.follow_mode_combo.currentIndex()
+        self.config.follow_user_id = self.follow_user_id_input.text().strip()
 
         if self.loaded_guild_id and self.loaded_voice_channel_id and self.loaded_text_channel_id:
             self.config.default_guild_id = self.loaded_guild_id
@@ -6190,6 +6301,8 @@ class MainWindow(QMainWindow):
             _ec_map = {"none": 0, "pause": 1, "disconnect": 2}
             self.empty_ch_action_combo.setCurrentIndex(_ec_map.get(self.config.empty_channel_action, 0))
             self.empty_ch_timeout_input.setText(str(self.config.empty_channel_timeout))
+            self.follow_mode_combo.setCurrentIndex(self.config.follow_mode)
+            self.follow_user_id_input.setText(self.config.follow_user_id)
             
             self.loaded_auto_connect = self.config.auto_connect_enabled
             self.loaded_guild_id = self.config.default_guild_id
